@@ -17,6 +17,7 @@
 Top-level functions should be added to `project.scripts` in `pyproject.toml`.
 """
 
+from datetime import datetime
 import sys
 import time
 from typing import Any, List
@@ -26,9 +27,10 @@ from tpu_info import device
 from tpu_info import metrics
 import grpc
 from rich.console import Console, Group
+from rich.console import RenderableType
 from rich.live import Live
+from rich.panel import Panel
 import rich.table
-
 
 def _bytes_to_gib(size: int) -> float:
   return size / (1 << 30)
@@ -36,9 +38,9 @@ def _bytes_to_gib(size: int) -> float:
 
 # TODO(vidishasethi): b/418938764 - Modularize by extracting
 #  each table's rendering logic into its own dedicated helper function.
-def _fetch_and_render_tables(chip_type: Any, count: int):
+def _fetch_and_render_tables(chip_type: Any, count: int)-> List[RenderableType]:
   """Fetches all TPU data and prepares a list of Rich Table objects for display."""
-  renderables: List[rich.table.Table] = []
+  renderables: List[RenderableType] = []
 
   table = rich.table.Table(title="TPU Chips", title_justify="left")
   table.add_column("Chip")
@@ -74,19 +76,29 @@ def _fetch_and_render_tables(chip_type: Any, count: int):
     device_usage = metrics.get_chip_usage(chip_type)
   except grpc.RpcError as e:
     if e.code() == grpc.StatusCode.UNAVAILABLE:  # pytype: disable=attribute-error
-      print(
-          "WARNING: Libtpu metrics unavailable. Is there a framework using the"
+      error_message = (
+          "Libtpu metrics unavailable. Is there a framework using the"
           " TPU? See"
-          " https://github.com/google/cloud-accelerator-diagnostics/tree/main/tpu_info"
-          " for more information"
+          " [link=https://github.com/google/cloud-accelerator-diagnostics/"
+          "tree/main/tpu_info]tpu_info docs[/link]"
+          " for more information."
+      )
+      error_message_renderable = Panel(
+          f"[yellow]WARNING:[/yellow] {error_message}",
+          title="[b]Runtime Utilization Status[/b]",
+          border_style="yellow",
       )
     else:
-      print(f"ERROR: {e}")
+      error_message = f"ERROR fetching runtime utilization: {e}"
+      error_message_renderable = Panel(f"[red]{error_message}[/red]",
+                                       title="[b]Runtime Utilization Error[/b]",
+                                       border_style="red")
+    renderables.append(error_message_renderable)
 
     device_usage = [metrics.Usage(i, -1, -1, -1) for i in range(count)]
 
   # TODO(wcromar): take alternative ports as a flag
-  print("Connected to libtpu at grpc://localhost:8431...")
+  # print("Connected to libtpu at grpc://localhost:8431...")
   for chip in device_usage:
     if chip.memory_usage < 0:
       memory_usage = "N/A"
@@ -119,14 +131,30 @@ def _fetch_and_render_tables(chip_type: Any, count: int):
 
     tensorcore_util_data = sdk.monitoring.get_metric("tensorcore_util").data()
   except ImportError as e:
-    print(f"WARNING: ImportError: {e}.")
+    renderables.append(
+        Panel(
+            f"[yellow]WARNING: ImportError: {e}. libtpu SDK not available.[/]",
+            title="[b]TensorCore Status[/b]",
+            border_style="yellow",
+        )
+    )
   except AttributeError as e:
-    print(
-        f"WARNING: {e}. Please check if the latest libtpu is used"
+    renderables.append(
+        Panel(
+            f"[yellow]WARNING: AttributeError: {e}. Please check if the"
+            " latest libtpu is used.[/]",
+            title="[b]TensorCore Status[/b]",
+            border_style="yellow",
+        )
     )
   except RuntimeError as e:
-    print(
-        f"WARNING: {e}. Please check if the latest vbar control agent is used."
+    renderables.append(
+        Panel(
+            f"[red]ERROR: RuntimeError: {e}. Please check if the latest vbar"
+            " control agent is used.[/]",
+            title="[b]TensorCore Status[/b]",
+            border_style="red",
+        )
     )
   else:
     for i in range(len(tensorcore_util_data)):
@@ -152,13 +180,24 @@ def _fetch_and_render_tables(chip_type: Any, count: int):
     )
   except grpc.RpcError as e:
     if e.code() == grpc.StatusCode.UNAVAILABLE:  # pytype: disable=attribute-error
-      print(
-          "WARNING: Buffer Transfer Latency metrics unavailable. Did you start"
+      error_message = (
+          "Buffer Transfer Latency metrics unavailable. Did you start"
           " a MULTI_SLICE workload with"
           " `TPU_RUNTIME_METRICS_PORTS=8431,8432,8433,8434`?"
       )
+      renderables.append(
+          Panel(f"[yellow]WARNING:[/yellow] {error_message}",
+                title="[b]Buffer Transfer Latency Status[/b]",
+                border_style="yellow")
+      )
+
     else:
-      print(f"ERROR: {e}")
+      error_message = f"ERROR fetching buffer transfer latency: {e}"
+      renderables.append(
+          Panel(f"[red]{error_message}[/red]",
+                title="[b]Buffer Transfer Latency Error[/b]",
+                border_style="red")
+      )
 
     buffer_transfer_latency_distributions = []
 
@@ -175,6 +214,21 @@ def _fetch_and_render_tables(chip_type: Any, count: int):
   return renderables
 
 
+def _get_runtime_info(rate: float) -> Panel:
+  """Returns a Rich Panel with runtime info for the streaming mode."""
+  current_ts = time.time()
+  last_updated_time_str = datetime.fromtimestamp(current_ts).strftime(
+      "%H:%M:%S %Y-%m-%d"
+  )
+  runtime_status = (
+      f"Refresh rate: {rate}s | Last update: {last_updated_time_str}"
+  )
+  status_panel = Panel(
+      runtime_status, title="[b]Streaming Status[/b]", border_style="green"
+  )
+  return status_panel
+
+
 def print_chip_info():
   """Print local TPU devices and libtpu runtime metrics."""
   cli_args = args.parse_arguments()
@@ -188,14 +242,20 @@ def print_chip_info():
     if cli_args.rate <= 0:
       print("Error: Refresh rate must be positive.", file=sys.stderr)
       return
-
     print(
         f"Starting streaming mode (refresh rate: {cli_args.rate}s). Press"
         " Ctrl+C to exit."
     )
 
+    if cli_args.rate > 0:
+      data_refresh_hz = 1.0 / cli_args.rate
+      target_screen_fps = data_refresh_hz * 1.2
+      screen_refresh_per_second = min(max(4, int(target_screen_fps)), 30)
+    else:
+      screen_refresh_per_second = 4
     try:
       renderables = _fetch_and_render_tables(chip_type, count)
+      status_panel = _get_runtime_info(cli_args.rate)
 
       if not renderables and chip_type:
         print(
@@ -204,18 +264,29 @@ def print_chip_info():
         )
         return
 
-      render_group = Group(*renderables)
+      render_group = Group(*(renderables if renderables else []))
+      display_group = Group(status_panel, render_group)
 
       with Live(
-          render_group,
-          refresh_per_second=4,
+          display_group,
+          refresh_per_second=screen_refresh_per_second,
           screen=True,
           vertical_overflow="visible",
       ) as live:
         while True:
-          time.sleep(cli_args.rate)
-          new_renderables = _fetch_and_render_tables(chip_type, count)
-          live.update(Group(*new_renderables))
+          try:
+            time.sleep(cli_args.rate)
+            new_renderables = _fetch_and_render_tables(chip_type, count)
+            render_group = Group(*(new_renderables if new_renderables else []))
+            status_panel = _get_runtime_info(cli_args.rate)
+
+            display_group = Group(status_panel, render_group)
+            live.update(display_group)
+          except Exception as loop_e:
+            import traceback
+            print(f"\nFATAL ERROR during streaming update cycle, stopping stream: {type(loop_e).__name__}: {loop_e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            raise loop_e 
     except KeyboardInterrupt:
       print("\nExiting streaming mode.")
     except Exception as e:
