@@ -255,7 +255,7 @@ def print_chip_info():
       screen_refresh_per_second = 4
     try:
       renderables = _fetch_and_render_tables(chip_type, count)
-      status_panel = _get_runtime_info(cli_args.rate)
+      streaming_status = _get_runtime_info(cli_args.rate)
 
       if not renderables and chip_type:
         print(
@@ -265,10 +265,10 @@ def print_chip_info():
         return
 
       render_group = Group(*(renderables if renderables else []))
-      display_group = Group(status_panel, render_group)
 
       with Live(
-          display_group,
+          streaming_status,
+          render_group,
           refresh_per_second=screen_refresh_per_second,
           screen=True,
           vertical_overflow="visible",
@@ -278,10 +278,9 @@ def print_chip_info():
             time.sleep(cli_args.rate)
             new_renderables = _fetch_and_render_tables(chip_type, count)
             render_group = Group(*(new_renderables if new_renderables else []))
-            status_panel = _get_runtime_info(cli_args.rate)
+            streaming_status = _get_runtime_info(cli_args.rate)
 
-            display_group = Group(status_panel, render_group)
-            live.update(display_group)
+            live.update(streaming_status, render_group)
           except Exception as loop_e:
             import traceback
             print(f"\nFATAL ERROR during streaming update cycle, stopping stream: {type(loop_e).__name__}: {loop_e}", file=sys.stderr)
