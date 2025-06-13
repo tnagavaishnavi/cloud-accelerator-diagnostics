@@ -18,6 +18,8 @@ Top-level functions should be added to `project.scripts` in `pyproject.toml`.
 """
 
 from datetime import datetime
+import importlib.metadata
+import re
 import sys
 import time
 from typing import Any, List
@@ -25,12 +27,14 @@ from typing import Any, List
 from tpu_info import args
 from tpu_info import device
 from tpu_info import metrics
+
 import grpc
 from rich.console import Console, Group
 from rich.console import RenderableType
 from rich.live import Live
 from rich.panel import Panel
 import rich.table
+from rich.text import Text
 
 def _bytes_to_gib(size: int) -> float:
   return size / (1 << 30)
@@ -214,19 +218,75 @@ def _fetch_and_render_tables(chip_type: Any, count: int)-> List[RenderableType]:
   return renderables
 
 
-def _get_runtime_info(rate: float) -> Panel:
-  """Returns a Rich Panel with runtime info for the streaming mode."""
+def _fetch_cli_version() -> str:
+  """Returns the version of the current TPU CLI."""
+  try:
+    version = importlib.metadata.version("tpu-info")
+  except importlib.metadata.PackageNotFoundError:
+    version = "unknown (package metadata not found)"
+  return version
+
+LIBTPU_SDK_HEADER_PATH = "google3/learning/brain/tfrc/sdk/c/libtpu_sdk_c_api.h"
+
+
+def _fetch_libtpu_sdk_version() -> str:
+  """Fetches the Libtpu SDK API version from its C header file."""
+  major_version = None
+  minor_version = None
+  try:
+    with open(LIBTPU_SDK_HEADER_PATH, "r") as f:
+      content = f.read()
+
+    major_match = re.search(
+        r"#define\s+LIBTPU_SDK_API_VERSION_MAJOR\s+(\d+)", content
+    )
+    if major_match:
+      major_version = major_match.group(1)
+
+    minor_match = re.search(
+        r"#define\s+LIBTPU_SDK_API_VERSION_MINOR\s+(\d+)", content
+    )
+    if minor_match:
+      minor_version = minor_match.group(1)
+
+    if major_version is not None and minor_version is not None:
+      return f"{major_version}.{minor_version}"
+    else:
+      missing_parts = []
+      if major_version is None:
+        missing_parts.append("major")
+      if minor_version is None:
+        missing_parts.append("minor")
+      return (
+          f"unknown (could not find {', '.join(missing_parts)} version in"
+          f" {LIBTPU_SDK_HEADER_PATH})"
+      )
+
+  except FileNotFoundError:
+    return f"unknown (file not found: {LIBTPU_SDK_HEADER_PATH})"
+  except Exception as e:
+    return f"unknown (error reading SDK version: {e})"
+
+
+def print_version_info():
+  """Print the version of the current TPU CLI."""
+  cli_args = args.parse_arguments()
+  if cli_args.version:
+    print(f"tpu-info version: {_fetch_cli_version()}")
+    print(f"libtpu SDK version: {_fetch_libtpu_sdk_version()}")
+
+
+def _get_runtime_info(rate: float) -> Text:
+  """Returns a Rich Text with runtime info for the streaming mode."""
   current_ts = time.time()
   last_updated_time_str = datetime.fromtimestamp(current_ts).strftime(
       "%H:%M:%S %Y-%m-%d"
   )
-  runtime_status = (
-      f"Refresh rate: {rate}s | Last update: {last_updated_time_str}"
+  runtime_status = Text(
+      f"Refresh rate: {rate}s | Last update: {last_updated_time_str}",
+      justify="right",
   )
-  status_panel = Panel(
-      runtime_status, title="[b]Streaming Status[/b]", border_style="green"
-  )
-  return status_panel
+  return runtime_status
 
 
 def print_chip_info():
@@ -264,11 +324,9 @@ def print_chip_info():
         )
         return
 
-      render_group = Group(*(renderables if renderables else []))
-
+      display = Group(streaming_status, *(renderables if renderables else []))
       with Live(
-          streaming_status,
-          render_group,
+          display,
           refresh_per_second=screen_refresh_per_second,
           screen=True,
           vertical_overflow="visible",
@@ -277,10 +335,12 @@ def print_chip_info():
           try:
             time.sleep(cli_args.rate)
             new_renderables = _fetch_and_render_tables(chip_type, count)
-            render_group = Group(*(new_renderables if new_renderables else []))
             streaming_status = _get_runtime_info(cli_args.rate)
 
-            live.update(streaming_status, render_group)
+            display = Group(
+                streaming_status, *(new_renderables if new_renderables else [])
+            )
+            live.update(display)
           except Exception as loop_e:
             import traceback
             print(f"\nFATAL ERROR during streaming update cycle, stopping stream: {type(loop_e).__name__}: {loop_e}", file=sys.stderr)
