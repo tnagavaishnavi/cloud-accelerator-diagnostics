@@ -226,54 +226,12 @@ def _fetch_cli_version() -> str:
     version = "unknown (package metadata not found)"
   return version
 
-LIBTPU_SDK_HEADER_PATH = "google3/learning/brain/tfrc/sdk/c/libtpu_sdk_c_api.h"
 
-
-def _fetch_libtpu_sdk_version() -> str:
-  """Fetches the Libtpu SDK API version from its C header file."""
-  major_version = None
-  minor_version = None
-  try:
-    with open(LIBTPU_SDK_HEADER_PATH, "r") as f:
-      content = f.read()
-
-    major_match = re.search(
-        r"#define\s+LIBTPU_SDK_API_VERSION_MAJOR\s+(\d+)", content
-    )
-    if major_match:
-      major_version = major_match.group(1)
-
-    minor_match = re.search(
-        r"#define\s+LIBTPU_SDK_API_VERSION_MINOR\s+(\d+)", content
-    )
-    if minor_match:
-      minor_version = minor_match.group(1)
-
-    if major_version is not None and minor_version is not None:
-      return f"{major_version}.{minor_version}"
-    else:
-      missing_parts = []
-      if major_version is None:
-        missing_parts.append("major")
-      if minor_version is None:
-        missing_parts.append("minor")
-      return (
-          f"unknown (could not find {', '.join(missing_parts)} version in"
-          f" {LIBTPU_SDK_HEADER_PATH})"
-      )
-
-  except FileNotFoundError:
-    return f"unknown (file not found: {LIBTPU_SDK_HEADER_PATH})"
-  except Exception as e:
-    return f"unknown (error reading SDK version: {e})"
-
-
-def print_version_info():
+def _print_version_info():
   """Print the version of the current TPU CLI."""
   cli_args = args.parse_arguments()
   if cli_args.version:
     print(f"tpu-info version: {_fetch_cli_version()}")
-    print(f"libtpu SDK version: {_fetch_libtpu_sdk_version()}")
 
 
 def _get_runtime_info(rate: float) -> Text:
@@ -291,6 +249,7 @@ def _get_runtime_info(rate: float) -> Text:
 
 def print_chip_info():
   """Print local TPU devices and libtpu runtime metrics."""
+  _print_version_info()
   cli_args = args.parse_arguments()
   # TODO(wcromar): Merge all of this info into one table
   chip_type, count = device.get_local_chips()
