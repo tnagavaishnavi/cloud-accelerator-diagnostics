@@ -21,6 +21,7 @@ from datetime import datetime
 import importlib.metadata
 import re
 import sys
+import subprocess
 import time
 from typing import Any, List
 
@@ -226,12 +227,35 @@ def _fetch_cli_version() -> str:
     version = "unknown (package metadata not found)"
   return version
 
+def _fetch_libtpu_version() -> str:
+  """Fetches the libtpu version using 'pip list | grep libtpu'.
+    This is a fallback if the gRPC approach fails.
+  """
+  try:
+    result = subprocess.run(
+        ["pip", "list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    for line in result.stdout.splitlines():
+      if "libtpu" in line:
+        parts = line.split()
+        if len(parts) >= 2:
+          return parts[1]
+    return "unknown (libtpu not found in pip list)"
+  except subprocess.CalledProcessError as e:
+    return f"unknown (error running pip list: {e})"
+  except Exception as e:
+    return f"unknown (unexpected error getting libtpu version from pip: {e})"
+
 
 def _print_version_info():
   """Print the version of the current TPU CLI."""
   cli_args = args.parse_arguments()
   if cli_args.version:
     print(f"tpu-info version: {_fetch_cli_version()}")
+    print(f"{_fetch_libtpu_version()}")
 
 
 def _get_runtime_info(rate: float) -> Text:
@@ -250,6 +274,7 @@ def _get_runtime_info(rate: float) -> Text:
 def print_chip_info():
   """Print local TPU devices and libtpu runtime metrics."""
   _print_version_info()
+  return
   cli_args = args.parse_arguments()
   # TODO(wcromar): Merge all of this info into one table
   chip_type, count = device.get_local_chips()
